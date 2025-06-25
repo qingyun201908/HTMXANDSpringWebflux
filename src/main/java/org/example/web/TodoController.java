@@ -11,8 +11,6 @@ import org.springframework.web.util.HtmlUtils;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
-
-import java.time.Duration;
 import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
 
@@ -27,8 +25,14 @@ public class TodoController {
 
     public static class Form {
         private String content;
-        public String getContent() { return content; }
-        public void setContent(String content) { this.content = content; }
+
+        public String getContent() {
+            return content;
+        }
+
+        public void setContent(String content) {
+            this.content = content;
+        }
     }
 
     public TodoController(TodoRepo repo, ReactiveRedisTemplate<String, String> redisTemplate) {
@@ -42,7 +46,6 @@ public class TodoController {
                 .subscribe(eventSink::tryEmitNext);
     }
 
-    // ✅ 修改1: 使用全局广播替代用户隔离
     private void broadcastEvent(String eventType, Todo todo) {
         String messageId = "global_" + todo.getId() + "_" + System.currentTimeMillis();
         String payload = "";
@@ -64,7 +67,6 @@ public class TodoController {
         }
     }
 
-    // ✅ 修改2: 简化SSE端点，移除用户隔离
     @GetMapping(produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public Flux<String> list() {
         Flux<String> initialFlux = repo.findAllByOrderByIdDesc()
@@ -85,7 +87,6 @@ public class TodoController {
     }
 
 
-
     @PostMapping(path = "/{id}/delete", produces = MediaType.TEXT_HTML_VALUE)
     public Mono<String> delete(@PathVariable Long id) {
         return repo.findById(id)
@@ -94,27 +95,23 @@ public class TodoController {
                 .thenReturn("");
     }
 
-    // ✅ 修改4: 移除与设备/用户隔离相关的辅助方法
-    // @GetMapping("/device/connect/{userId}/{deviceId}")
-    // @PostMapping("/message/ack/{messageId}")
-    // cleanupMessageRecords()
 
     private String renderItem(Todo t) {
         return """
-   <li id="todo-%d" class="message-item">
-     <div class="message-content">
-       %s
-       <div class="message-extra">
-         <div class="message-time"><i class="far fa-clock"></i> %s</div>
-       </div>
-     </div>
-     <div class="message-actions">
-       <button class="delete-btn" onclick="handleDelete(%d)">
-         <i class="fas fa-trash-alt"></i>
-       </button>
-     </div>
-   </li>
-   """
+                <li id="todo-%d" class="message-item">
+                  <div class="message-content">
+                    %s
+                    <div class="message-extra">
+                      <div class="message-time"><i class="far fa-clock"></i> %s</div>
+                    </div>
+                  </div>
+                  <div class="message-actions">
+                    <button class="delete-btn" onclick="handleDelete(%d)">
+                      <i class="fas fa-trash-alt"></i>
+                    </button>
+                  </div>
+                </li>
+                """
                 .formatted(
                         t.getId(),
                         escapeHtml(t.getContent()),
@@ -126,29 +123,30 @@ public class TodoController {
 
     private String renderItemEditing(Todo t) {
         return """
-           <li id="todo-%d" class="message-item editing">
-             <form hx-post="/api/todo/%d" hx-target="#todo-%d" hx-swap="outerHTML" class="edit-form">
-               <input class="edit-input" name="content" value="%s" required autofocus>
-               <div class="form-actions">
-                 <button type="submit" class="btn btn-save">
-                   <i class="fas fa-check"></i> 保存
-                 </button>
-                 <button type="button" class="btn btn-cancel" 
-                         hx-get="/api/todo/%d"
-                         hx-target="#todo-%d"
-                         hx-swap="outerHTML">
-                   <i class="fas fa-times"></i> 取消
-                 </button>
-               </div>
-             </form>
-           </li>
-           """
+                <li id="todo-%d" class="message-item editing">
+                  <form hx-post="/api/todo/%d" hx-target="#todo-%d" hx-swap="outerHTML" class="edit-form">
+                    <input class="edit-input" name="content" value="%s" required autofocus>
+                    <div class="form-actions">
+                      <button type="submit" class="btn btn-save">
+                        <i class="fas fa-check"></i> 保存
+                      </button>
+                      <button type="button" class="btn btn-cancel" 
+                              hx-get="/api/todo/%d"
+                              hx-target="#todo-%d"
+                              hx-swap="outerHTML">
+                        <i class="fas fa-times"></i> 取消
+                      </button>
+                    </div>
+                  </form>
+                </li>
+                """
                 .formatted(
                         t.getId(), t.getId(), t.getId(),
                         escapeHtml(t.getContent()),
                         t.getId(), t.getId()
                 );
     }
+
     private String escapeHtml(String s) {
         return HtmlUtils.htmlEscape(s);
     }
