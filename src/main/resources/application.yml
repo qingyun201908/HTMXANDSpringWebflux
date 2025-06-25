@@ -1,0 +1,6 @@
+# application.yml
+spring:
+  redis:
+    lettuce:
+      pool:
+        max-active: 1000 # 提高Redis连接池容量

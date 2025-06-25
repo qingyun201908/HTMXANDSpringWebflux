@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="zh-CN" xmlns:hx-on="http://www.w3.org/1999/xhtml">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SSE待办列表（同步修复版）</title>
+    <script src="https://unpkg.com/htmx.org@1.9.10/dist/htmx.min.js"></script>
+    <script>
+        // ✅ 全局SSE连接管理器
+        let sseConnection = null;
+        let retryCount = 0;
+        const MAX_RETRIES = 5;
+
+        document.addEventListener('DOMContentLoaded', () => {
+            initializeSession();
+            setupSSEConnection();
+            setupFormSubmit();
+        });
+
+        // ✅ 初始化用户会话
+        function initializeSession() {
+            // 生成持久化的设备ID
+            let deviceId = localStorage.getItem('sseDeviceId');
+            if (!deviceId) {
+                deviceId = 'device_' + Date.now() + '_' + Math.random().toString(36).substr(2, 12);
+                localStorage.setItem('sseDeviceId', deviceId);
+            }
+            document.cookie = `deviceId=${deviceId}; path=/; max-age=31536000`;
+
+            // 生成或获取用户ID
+            let userId = localStorage.getItem('sseUserId');
+            if (!userId) {
+                userId = 'user_' + Math.random().toString(36).substr(2, 8);
+                localStorage.setItem('sseUserId', userId);
+            }
+            document.cookie = `userId=${userId}; path=/; max-age=31536000`;
+        }
+
+        // ✅ 建立SSE连接（多标签页共享）
+        function setupSSEConnection() {
+            // 关闭现有连接
+            if (sseConnection) {
+                sseConnection.close();
+                sseConnection = null;
+            }
+
+            const userId = localStorage.getItem('sseUserId');
+            const deviceId = localStorage.getItem('sseDeviceId');
+            const url = `/api/todo?userId=${userId}&deviceId=${deviceId}&rnd=${Date.now()}`;
+
+            sseConnection = new EventSource(url);
+
+            // ✅ 核心修复：事件处理器
+            sseConnection.addEventListener('create', handleCreateEvent);
+            sseConnection.addEventListener('update', handleUpdateEvent);
+            sseConnection.addEventListener('delete', handleDeleteEvent);
+
+            // 连接状态处理
+            sseConnection.onopen = () => {
+                retryCount = 0;
+                updateConnectionStatus('connected', '已连接');
+            };
+
+            sseConnection.onerror = () => {
+                updateConnectionStatus('disconnected', '连接断开');
+                setTimeout(() => {
+                    if (retryCount < MAX_RETRIES) {
+                        retryCount++;
+                        setupSSEConnection();
+                    } else {
+                        updateConnectionStatus('error', '连接失败，请刷新页面');
+                    }
+                }, 2000);
+            };
+        }
+
+        // ✅ 处理创建事件
+        function handleCreateEvent(e) {
+            if (!e.data) return;
+
+            const html = extractSSEData(e.data);
+            if (!html) return;
+
+            const temp = document.createElement('div');
+            temp.innerHTML = html;
+            const newItem = temp.firstChild;
+
+            if (!newItem) return;
+
+            const existingItem = document.getElementById(newItem.id);
+            const todoList = document.getElementById('todo-list');
+
+            if (existingItem) {
+                existingItem.replaceWith(newItem);
+            } else {
+                todoList.prepend(newItem);
+                newItem.classList.add('new-item');
+                setTimeout(() => newItem.classList.remove('new-item'), 300);
+            }
+
+            // ✅ 确认消息接收
+            acknowledgeEvent(e.lastEventId);
+        }
+
+        // ✅ 处理更新事件
+        function handleUpdateEvent(e) {
+            if (!e.data) return;
+
+            const html = extractSSEData(e.data);
+            if (!html) return;
+
+            const temp = document.createElement('div');
+            temp.innerHTML = html;
+            const updatedItem = temp.firstChild;
+
+            if (!updatedItem) return;
+
+            const existingItem = document.getElementById(updatedItem.id);
+
+            if (existingItem) {
+                updatedItem.classList.add('updated-item');
+                setTimeout(() => updatedItem.classList.remove('updated-item'), 300);
+                existingItem.replaceWith(updatedItem);
+            }
+
+            // ✅ 确认消息接收
+            acknowledgeEvent(e.lastEventId);
+        }
+
+        // ✅ 处理删除事件
+        function handleDeleteEvent(e) {
+            const todoId = Number(e.data);
+            if (isNaN(todoId)) return;
+
+            const element = document.getElementById(`todo-${todoId}`);
+            if (element) {
+                element.classList.add('deleting');
+                setTimeout(() => element.remove(), 300);
+            }
+
+            // ✅ 确认消息接收
+            acknowledgeEvent(e.lastEventId);
+        }
+
+        // ✅ 确认消息接收（核心修复）
+        function acknowledgeEvent(eventId) {
+            if (!eventId || eventId.startsWith('init_')) return;
+
+            fetch(`/api/todo/message/ack/${eventId}`, {
+                method: 'POST',
+                credentials: 'include'
+            }).catch(error => {
+                console.error('消息确认失败:', error);
+            });
+        }
+
+        // ✅ 从SSE数据中提取HTML内容
+        function extractSSEData(data) {
+            if (data.startsWith('data:')) {
+                return data.substring(5).trim();
+            }
+            return data;
+        }
+
+        // ✅ 更新连接状态显示
+        function updateConnectionStatus(status, message) {
+            const indicator = document.querySelector('#sync-status .indicator');
+            const statusText = document.querySelector('#sync-status .text');
+
+            indicator.className = 'indicator';
+            statusText.textContent = message;
+
+            switch (status) {
+                case 'connected':
+                    indicator.classList.add('connected');
+                    break;
+                case 'disconnected':
+                    indicator.classList.add('disconnected');
+                    break;
+                case 'error':
+                    indicator.classList.add('error');
+                    break;
+            }
+        }
+
+        // ✅ 表单提交处理
+        function setupFormSubmit() {
+            const form = document.getElementById('todo-form');
+
+            form.addEventListener('htmx:afterRequest', (e) => {
+                if (e.detail.failed) {
+                    alert("操作失败，请重试");
+                    console.error("表单提交错误:", e.detail.xhr.status);
+                }
+            });
+        }
+    </script>
+    <style>
+        /* ... 基本样式保持不变 ... */
+
+        /* ✅ 新增同步状态样式 */
+        #sync-status {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-top: 16px;
+            padding: 8px;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+
+        .indicator {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+        }
+
+        .indicator.connected {
+            background-color: #28a745;
+            box-shadow: 0 0 8px rgba(40, 167, 69, 0.5);
+        }
+
+        .indicator.disconnected {
+            background-color: #ffc107;
+            animation: pulse 1.5s infinite;
+        }
+
+        .indicator.error {
+            background-color: #dc3545;
+            animation: pulse 0.5s infinite;
+        }
+
+        /* ✅ 新增动画效果 */
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.5; }
+            100% { opacity: 1; }
+        }
+
+        .new-item {
+            animation: slideIn 0.3s ease-out;
+        }
+
+        .updated-item {
+            animation: highlight 1s ease;
+        }
+
+        .deleting {
+            opacity: 0;
+            transform: translateX(20px);
+            transition: all 0.3s ease-out;
+        }
+
+        @keyframes slideIn {
+            from {
+                opacity: 0;
+                transform: translateY(20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        @keyframes highlight {
+            0% { background-color: rgba(255, 235, 59, 0.5); }
+            100% { background-color: transparent; }
+        }
+    </style>
+</head>
+<body>
+<div class="header">
+    <h1>Todo 列表（SSE实时更新）</h1>
+    <div class="domain">localhost:8080</div>
+</div>
+
+<div class="form-container">
+    <form id="todo-form"
+          hx-post="/api/todo"
+          hx-target="#todo-list"
+          hx-swap="afterbegin"
+          hx-on::after-request="this.reset()">
+
+        <label for="todo-input">新的待办事项</label>
+        <div class="input-group">
+            <input
+                    type="text"
+                    id="todo-input"
+                    name="content"
+                    placeholder="输入待办事项内容..."
+                    required
+                    autocomplete="off">
+            <button type="submit" class="btn btn-primary">添加</button>
+        </div>
+    </form>
+</div>
+
+<div class="todo-list-container">
+    <h2>待办事项列表</h2>
+    <ul id="todo-list"></ul>
+
+    <div id="sync-status">
+        <div class="indicator disconnected"></div>
+        <div class="text">正在连接...</div>
+    </div>
+</div>
+</body>
+</html>
